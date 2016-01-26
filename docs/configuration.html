@@ -48,7 +48,7 @@ Overrides can also be changed or set later using the alter topic command. This e
 To remove an override you can do
 <pre>
 <b> &gt; bin/kafka-topics.sh --zookeeper localhost:2181 --alter --topic my-topic
-    --deleteConfig max.message.bytes</b>
+    --delete-config max.message.bytes</b>
 </pre>
 
 The following are the topic-level configurations. The server's default configuration for this property is given under the Server Default Property heading, setting this default in the server config allows you to change the default given to topics that have no override specified.
@@ -106,8 +106,8 @@ The following are the topic-level configurations. The server's default configura
       <td>min.insync.replicas</td>
       <td>1</td>
       <td>min.insync.replicas</td>
-      <td>When a producer sets request.required.acks to -1, min.insync.replicas specifies the minimum number of replicas that must acknowledge a write for the write to be considered successful. If this minimum cannot be met, then the producer will raise an exception (either NotEnoughReplicas or NotEnoughReplicasAfterAppend).
-      When used together, min.insync.replicas and request.required.acks allow you to enforce greater durability guarantees. A typical scenario would be to create a topic with a replication factor of 3, set min.insync.replicas to 2, and produce with request.required.acks of -1. This will ensure that the producer raises an exception if a majority of replicas do not receive a write.</td>
+      <td>When a producer sets acks to "all", min.insync.replicas specifies the minimum number of replicas that must acknowledge a write for the write to be considered successful. If this minimum cannot be met, then the producer will raise an exception (either NotEnoughReplicas or NotEnoughReplicasAfterAppend).
+      When used together, min.insync.replicas and acks allow you to enforce greater durability guarantees. A typical scenario would be to create a topic with a replication factor of 3, set min.insync.replicas to 2, and produce with acks of "all". This will ensure that the producer raises an exception if a majority of replicas do not receive a write.</td>
     </tr>
     <tr>
       <td>retention.bytes</td>
@@ -270,11 +270,6 @@ The essential old consumer configurations are the following:
       <td>exclude.internal.topics</td>
       <td colspan="1">true</td>
       <td>Whether messages from internal topics (such as offsets) should be exposed to the consumer.</td>
-    </tr>
-     <tr>
-      <td>partition.assignment.strategy</td>
-      <td colspan="1">range</td>
-      <td>Select a strategy for assigning partitions to consumer streams. Possible values: range, roundrobin.</td>
     </tr>
     <tr>
       <td>client.id</td>

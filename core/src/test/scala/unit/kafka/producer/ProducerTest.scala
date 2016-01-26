@@ -22,13 +22,14 @@ import java.util.Properties
 
 import kafka.admin.AdminUtils
 import kafka.api.FetchRequestBuilder
-import kafka.common.{ErrorMapping, FailedToSendMessageException}
+import kafka.common.FailedToSendMessageException
 import kafka.consumer.SimpleConsumer
 import kafka.message.Message
 import kafka.serializer.StringEncoder
 import kafka.server.{KafkaConfig, KafkaRequestHandler, KafkaServer}
 import kafka.utils._
 import kafka.zk.ZooKeeperTestHarness
+import org.apache.kafka.common.protocol.Errors
 import org.apache.log4j.{Level, Logger}
 import org.junit.Assert._
 import org.junit.{After, Before, Test}
@@ -252,6 +253,7 @@ class ProducerTest extends ZooKeeperTestHarness with Logging{
     server1.startup()
     TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, topic, 0)
     TestUtils.waitUntilMetadataIsPropagated(servers, topic, 0)
+    TestUtils.waitUntilLeaderIsKnown(servers, topic, 0)
 
     try {
       // cross check if broker 1 got the messages
@@ -332,7 +334,7 @@ class ProducerTest extends ZooKeeperTestHarness with Logging{
       // create topic
       AdminUtils.createTopic(zkUtils, "new-topic", 2, 1)
       TestUtils.waitUntilTrue(() =>
-        AdminUtils.fetchTopicMetadataFromZk("new-topic", zkUtils).errorCode != ErrorMapping.UnknownTopicOrPartitionCode,
+        AdminUtils.fetchTopicMetadataFromZk("new-topic", zkUtils).errorCode != Errors.UNKNOWN_TOPIC_OR_PARTITION.code,
         "Topic new-topic not created after timeout",
         waitTime = zookeeper.tickTime)
       TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, "new-topic", 0)

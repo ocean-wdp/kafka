@@ -135,6 +135,7 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         self.messages_consumed = {idx: [] for idx in range(1, num_nodes + 1)}
         self.client_id = client_id
         self.print_key = print_key
+        self.log_level = "TRACE"
 
     def prop_file(self, node):
         """Return a string which can be used to create a configuration file appropriate for the given node."""
@@ -189,6 +190,10 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
 
         if self.print_key:
             cmd += " --property print.key=true"
+
+        # LoggingMessageFormatter was introduced in 0.9.0.0
+        if node.version > LATEST_0_8_2:
+            cmd+=" --formatter kafka.tools.LoggingMessageFormatter"
 
         cmd += " 2>> %(stderr)s | tee -a %(stdout)s &" % args
         return cmd

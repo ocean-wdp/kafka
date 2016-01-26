@@ -47,6 +47,8 @@ class KafkaService(JmxMixin, Service):
     # Kafka log segments etc go here
     DATA_LOG_DIR = os.path.join(PERSISTENT_ROOT, "kafka-data-logs")
     CONFIG_FILE = os.path.join(PERSISTENT_ROOT, "kafka.properties")
+    # Kafka Authorizer
+    SIMPLE_AUTHORIZER = "kafka.security.auth.SimpleAclAuthorizer"
 
     logs = {
         "kafka_operational_logs_info": {
@@ -61,7 +63,7 @@ class KafkaService(JmxMixin, Service):
     }
 
     def __init__(self, context, num_nodes, zk, security_protocol=SecurityConfig.PLAINTEXT, interbroker_security_protocol=SecurityConfig.PLAINTEXT,
-                 sasl_mechanism=SecurityConfig.SASL_MECHANISM_GSSAPI, topics=None, version=TRUNK, quota_config=None, jmx_object_names=None,
+                 sasl_mechanism=SecurityConfig.SASL_MECHANISM_GSSAPI, authorizer_class_name=None, topics=None, version=TRUNK, quota_config=None, jmx_object_names=None,
                  jmx_attributes=[], zk_connect_timeout=5000):
         """
         :type context
@@ -79,6 +81,7 @@ class KafkaService(JmxMixin, Service):
         self.sasl_mechanism = sasl_mechanism
         self.topics = topics
         self.minikdc = None
+        self.authorizer_class_name = authorizer_class_name
         #
         # In a heavily loaded and not very fast machine, it is
         # sometimes necessary to give more time for the zk client
@@ -114,7 +117,7 @@ class KafkaService(JmxMixin, Service):
         self.port_mappings[protocol] = self.port_mappings[protocol]._replace(open=False)
 
     def start_minikdc(self, add_principals=""):
-        if self.security_config.has_sasl_kerberos:
+        if self.security_config.has_sasl:
             if self.minikdc is None:
                 self.minikdc = MiniKdc(self.context, self.nodes, extra_principals = add_principals)
                 self.minikdc.start()
@@ -357,6 +360,37 @@ class KafkaService(JmxMixin, Service):
         self.logger.debug("Verify partition reassignment:")
         self.logger.debug(output)
 
+    def search_data_files(self, topic, messages):
+        """Check if a set of messages made it into the Kakfa data files. Note that
+        this method takes no account of replication. It simply looks for the
+        payload in all the partition files of the specified topic. 'messages' should be
+        an array of numbers. The list of missing messages is returned.
+        """
+        payload_match = "payload: " + "$|payload: ".join(str(x) for x in messages) + "$"
+        found = set([])
+
+        for node in self.nodes:
+            # Grab all .log files in directories prefixed with this topic
+            files = node.account.ssh_capture("find %s -regex  '.*/%s-.*/[^/]*.log'" % (KafkaService.DATA_LOG_DIR, topic))
+
+            # Check each data file to see if it contains the messages we want
+            for log in files:
+                cmd = "/opt/%s/bin/kafka-run-class.sh kafka.tools.DumpLogSegments --print-data-log --files %s " \
+                      "| grep -E \"%s\"" % (kafka_dir(node), log.strip(), payload_match)
+
+                for line in node.account.ssh_capture(cmd, allow_fail=True):
+                    for val in messages:
+                        if line.strip().endswith("payload: "+str(val)):
+                            self.logger.debug("Found %s in data-file [%s] in line: [%s]" % (val, log.strip(), line.strip()))
+                            found.add(val)
+
+        missing = list(set(messages) - found)
+
+        if len(missing) > 0:
+            self.logger.warn("The following values were not found in the data files: " + str(missing))
+
+        return missing
+
     def restart_node(self, node, clean_shutdown=True):
         """Restart the given node."""
         self.stop_node(node, clean_shutdown)
@@ -378,6 +412,56 @@ class KafkaService(JmxMixin, Service):
         leader_idx = int(partition_state["leader"])
         self.logger.info("Leader for topic %s and partition %d is now: %d" % (topic, partition, leader_idx))
         return self.get_node(leader_idx)
+
+    def list_consumer_groups(self, node=None, new_consumer=False, command_config=None):
+        """ Get list of consumer groups.
+        """
+        if node is None:
+            node = self.nodes[0]
+
+        if command_config is None:
+            command_config = ""
+        else:
+            command_config = "--command-config " + command_config
+
+        if new_consumer:
+            cmd = "/opt/%s/bin/kafka-consumer-groups.sh --new-consumer --bootstrap-server %s %s --list" % \
+                  (kafka_dir(node), self.bootstrap_servers(self.security_protocol), command_config)
+        else:
+            cmd = "/opt/%s/bin/kafka-consumer-groups.sh --zookeeper %s %s --list" % \
+                  (kafka_dir(node), self.zk.connect_setting(), command_config)
+        output = ""
+        self.logger.debug(cmd)
+        for line in node.account.ssh_capture(cmd):
+            if not line.startswith("SLF4J"):
+                output += line
+        self.logger.debug(output)
+        return output
+
+    def describe_consumer_group(self, group, node=None, new_consumer=False, command_config=None):
+        """ Describe a consumer group.
+        """
+        if node is None:
+            node = self.nodes[0]
+
+        if command_config is None:
+            command_config = ""
+        else:
+            command_config = "--command-config " + command_config
+
+        if new_consumer:
+            cmd = "/opt/%s/bin/kafka-consumer-groups.sh --new-consumer --bootstrap-server %s %s --group %s --describe" % \
+                  (kafka_dir(node), self.bootstrap_servers(self.security_protocol), command_config, group)
+        else:
+            cmd = "/opt/%s/bin/kafka-consumer-groups.sh --zookeeper %s %s --group %s --describe" % \
+                  (kafka_dir(node), self.zk.connect_setting(), command_config, group)
+        output = ""
+        self.logger.debug(cmd)
+        for line in node.account.ssh_capture(cmd):
+            if not (line.startswith("SLF4J") or line.startswith("GROUP, TOPIC") or line.startswith("Could not fetch offset")):
+                output += line
+        self.logger.debug(output)
+        return output
 
     def bootstrap_servers(self, protocol='PLAINTEXT'):
         """Return comma-delimited list of brokers in this cluster formatted as HOSTNAME1:PORT1,HOSTNAME:PORT2,...

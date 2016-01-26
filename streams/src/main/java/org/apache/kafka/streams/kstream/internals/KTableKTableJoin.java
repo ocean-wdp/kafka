@@ -22,37 +22,29 @@ import org.apache.kafka.streams.processor.AbstractProcessor;
 import org.apache.kafka.streams.processor.Processor;
 import org.apache.kafka.streams.processor.ProcessorContext;
 
-class KTableKTableJoin<K, V, V1, V2> implements KTableProcessorSupplier<K, V1, V> {
+class KTableKTableJoin<K, R, V1, V2> extends KTableKTableAbstractJoin<K, R, V1, V2> {
 
-    private final KTableValueGetterSupplier<K, V1> valueGetterSupplier1;
-    private final KTableValueGetterSupplier<K, V2> valueGetterSupplier2;
-    private final ValueJoiner<V1, V2, V> joiner;
-
-    KTableKTableJoin(KTableImpl<K, ?, V1> table1,
-                     KTableImpl<K, ?, V2> table2,
-                     ValueJoiner<V1, V2, V> joiner) {
-        this.valueGetterSupplier1 = table1.valueGetterSupplier();
-        this.valueGetterSupplier2 = table2.valueGetterSupplier();
-        this.joiner = joiner;
+    KTableKTableJoin(KTableImpl<K, ?, V1> table1, KTableImpl<K, ?, V2> table2, ValueJoiner<V1, V2, R> joiner) {
+        super(table1, table2, joiner);
     }
 
     @Override
-    public Processor<K, V1> get() {
+    public Processor<K, Change<V1>> get() {
         return new KTableKTableJoinProcessor(valueGetterSupplier2.get());
     }
 
     @Override
-    public KTableValueGetterSupplier<K, V> view() {
-        return new KTableValueGetterSupplier<K, V>() {
+    public KTableValueGetterSupplier<K, R> view() {
+        return new KTableValueGetterSupplier<K, R>() {
 
-            public KTableValueGetter<K, V> get() {
+            public KTableValueGetter<K, R> get() {
                 return new KTableKTableJoinValueGetter(valueGetterSupplier1.get(), valueGetterSupplier2.get());
             }
 
         };
     }
 
-    private class KTableKTableJoinProcessor extends AbstractProcessor<K, V1> {
+    private class KTableKTableJoinProcessor extends AbstractProcessor<K, Change<V1>> {
 
         private final KTableValueGetter<K, V2> valueGetter;
 
@@ -68,21 +60,25 @@ class KTableKTableJoin<K, V, V1, V2> implements KTableProcessorSupplier<K, V1, V
         }
 
         @Override
-        public void process(K key, V1 value1) {
-            V newValue = null;
+        public void process(K key, Change<V1> change) {
+            R newValue = null;
+            R oldValue = null;
+            V2 value2 = null;
 
-            if (value1 != null) {
-                V2 value2 = valueGetter.get(key);
+            if (change.newValue != null || change.oldValue != null)
+                value2 = valueGetter.get(key);
 
-                if (value2 != null)
-                    newValue = joiner.apply(value1, value2);
-            }
+            if (change.newValue != null && value2 != null)
+                newValue = joiner.apply(change.newValue, value2);
 
-            context().forward(key, newValue);
+            if (sendOldValues && change.oldValue != null && value2 != null)
+                oldValue = joiner.apply(change.oldValue, value2);
+
+            context().forward(key, new Change<>(newValue, oldValue));
         }
     }
 
-    private class KTableKTableJoinValueGetter implements KTableValueGetter<K, V> {
+    private class KTableKTableJoinValueGetter implements KTableValueGetter<K, R> {
 
         private final KTableValueGetter<K, V1> valueGetter1;
         private final KTableValueGetter<K, V2> valueGetter2;
@@ -99,8 +95,8 @@ class KTableKTableJoin<K, V, V1, V2> implements KTableProcessorSupplier<K, V1, V
         }
 
         @Override
-        public V get(K key) {
-            V newValue = null;
+        public R get(K key) {
+            R newValue = null;
             V1 value1 = valueGetter1.get(key);
 
             if (value1 != null) {

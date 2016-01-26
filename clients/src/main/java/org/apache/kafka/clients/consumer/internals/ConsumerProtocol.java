@@ -71,13 +71,13 @@ public class ConsumerProtocol {
 
     public static final Schema SUBSCRIPTION_V0 = new Schema(
             new Field(TOPICS_KEY_NAME, new ArrayOf(Type.STRING)),
-            new Field(USER_DATA_KEY_NAME, Type.BYTES));
+            new Field(USER_DATA_KEY_NAME, Type.NULLABLE_BYTES));
     public static final Schema TOPIC_ASSIGNMENT_V0 = new Schema(
             new Field(TOPIC_KEY_NAME, Type.STRING),
             new Field(PARTITIONS_KEY_NAME, new ArrayOf(Type.INT32)));
     public static final Schema ASSIGNMENT_V0 = new Schema(
             new Field(TOPIC_PARTITIONS_KEY_NAME, new ArrayOf(TOPIC_ASSIGNMENT_V0)),
-            new Field(USER_DATA_KEY_NAME, Type.BYTES));
+            new Field(USER_DATA_KEY_NAME, Type.NULLABLE_BYTES));
 
     public static ByteBuffer serializeSubscription(PartitionAssignor.Subscription subscription) {
         Struct struct = new Struct(SUBSCRIPTION_V0);
@@ -91,10 +91,10 @@ public class ConsumerProtocol {
     }
 
     public static PartitionAssignor.Subscription deserializeSubscription(ByteBuffer buffer) {
-        Struct header = (Struct) CONSUMER_PROTOCOL_HEADER_SCHEMA.read(buffer);
+        Struct header = CONSUMER_PROTOCOL_HEADER_SCHEMA.read(buffer);
         Short version = header.getShort(VERSION_KEY_NAME);
         checkVersionCompatibility(version);
-        Struct struct = (Struct) SUBSCRIPTION_V0.read(buffer);
+        Struct struct = SUBSCRIPTION_V0.read(buffer);
         ByteBuffer userData = struct.getBytes(USER_DATA_KEY_NAME);
         List<String> topics = new ArrayList<>();
         for (Object topicObj : struct.getArray(TOPICS_KEY_NAME))
@@ -103,10 +103,10 @@ public class ConsumerProtocol {
     }
 
     public static PartitionAssignor.Assignment deserializeAssignment(ByteBuffer buffer) {
-        Struct header = (Struct) CONSUMER_PROTOCOL_HEADER_SCHEMA.read(buffer);
+        Struct header = CONSUMER_PROTOCOL_HEADER_SCHEMA.read(buffer);
         Short version = header.getShort(VERSION_KEY_NAME);
         checkVersionCompatibility(version);
-        Struct struct = (Struct) ASSIGNMENT_V0.read(buffer);
+        Struct struct = ASSIGNMENT_V0.read(buffer);
         ByteBuffer userData = struct.getBytes(USER_DATA_KEY_NAME);
         List<TopicPartition> partitions = new ArrayList<>();
         for (Object structObj : struct.getArray(TOPIC_PARTITIONS_KEY_NAME)) {

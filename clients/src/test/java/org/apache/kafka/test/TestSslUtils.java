@@ -27,8 +27,17 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.EOFException;
 import java.math.BigInteger;
+
 import javax.net.ssl.TrustManagerFactory;
-import java.security.*;
+
+import java.security.GeneralSecurityException;
+import java.security.Key;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.Security;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -65,7 +74,7 @@ public class TestSslUtils {
      * @param days how many days from now the Certificate is valid for
      * @param algorithm the signing algorithm, eg "SHA1withRSA"
      * @return the self-signed certificate
-     * @throws CertificateException thrown if a security error or an IO error ocurred.
+     * @throws CertificateException thrown if a security error or an IO error occurred.
      */
     public static X509Certificate generateCertificate(String dn, KeyPair pair,
                                                       int days, String algorithm)
@@ -205,6 +214,11 @@ public class TestSslUtils {
 
     public static  Map<String, Object> createSslConfig(boolean useClientCert, boolean trustStore, Mode mode, File trustStoreFile, String certAlias)
         throws IOException, GeneralSecurityException {
+        return createSslConfig(useClientCert, trustStore, mode, trustStoreFile, certAlias, "localhost");
+    }
+
+    public static  Map<String, Object> createSslConfig(boolean useClientCert, boolean trustStore, Mode mode, File trustStoreFile, String certAlias, String host)
+        throws IOException, GeneralSecurityException {
         Map<String, X509Certificate> certs = new HashMap<String, X509Certificate>();
         File keyStoreFile;
         Password password;
@@ -219,13 +233,13 @@ public class TestSslUtils {
         if (useClientCert) {
             keyStoreFile = File.createTempFile("clientKS", ".jks");
             KeyPair cKP = generateKeyPair("RSA");
-            X509Certificate cCert = generateCertificate("CN=localhost, O=client", cKP, 30, "SHA1withRSA");
+            X509Certificate cCert = generateCertificate("CN=" + host + ", O=client", cKP, 30, "SHA1withRSA");
             createKeyStore(keyStoreFile.getPath(), password, "client", cKP.getPrivate(), cCert);
             certs.put(certAlias, cCert);
         } else {
             keyStoreFile = File.createTempFile("serverKS", ".jks");
             KeyPair sKP = generateKeyPair("RSA");
-            X509Certificate sCert = generateCertificate("CN=localhost, O=server", sKP, 30,
+            X509Certificate sCert = generateCertificate("CN=" + host + ", O=server", sKP, 30,
                                                         "SHA1withRSA");
             createKeyStore(keyStoreFile.getPath(), password, password, "server", sKP.getPrivate(), sCert);
             certs.put(certAlias, sCert);

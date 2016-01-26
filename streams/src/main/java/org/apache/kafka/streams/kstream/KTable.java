@@ -19,6 +19,7 @@ package org.apache.kafka.streams.kstream;
 
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serializer;
+import org.apache.kafka.streams.KeyValue;
 
 /**
  * KTable is an abstraction of a change log stream.
@@ -111,10 +112,10 @@ public interface KTable<K, V> {
      * @param other the instance of KTable joined with this stream
      * @param joiner ValueJoiner
      * @param <V1>   the value type of the other stream
-     * @param <V2>   the value type of the new stream
-     * @return the instance of KStream
+     * @param <R>   the value type of the new stream
+     * @return the instance of KTable
      */
-    <V1, V2> KTable<K, V2> join(KTable<K, V1> other, ValueJoiner<V, V1, V2> joiner);
+    <V1, R> KTable<K, R> join(KTable<K, V1> other, ValueJoiner<V, V1, R> joiner);
 
     /**
      * Combines values of this KTable with another KTable using Outer Join.
@@ -122,10 +123,10 @@ public interface KTable<K, V> {
      * @param other the instance of KTable joined with this stream
      * @param joiner ValueJoiner
      * @param <V1>   the value type of the other stream
-     * @param <V2>   the value type of the new stream
-     * @return the instance of KStream
+     * @param <R>   the value type of the new stream
+     * @return the instance of KTable
      */
-    <V1, V2> KTable<K, V2> outerJoin(KTable<K, V1> other, ValueJoiner<V, V1, V2> joiner);
+    <V1, R> KTable<K, R> outerJoin(KTable<K, V1> other, ValueJoiner<V, V1, R> joiner);
 
     /**
      * Combines values of this KTable with another KTable using Left Join.
@@ -133,9 +134,48 @@ public interface KTable<K, V> {
      * @param other the instance of KTable joined with this stream
      * @param joiner ValueJoiner
      * @param <V1>   the value type of the other stream
-     * @param <V2>   the value type of the new stream
-     * @return the instance of KStream
+     * @param <R>   the value type of the new stream
+     * @return the instance of KTable
      */
-    <V1, V2> KTable<K, V2> leftJoin(KTable<K, V1> other, ValueJoiner<V, V1, V2> joiner);
+    <V1, R> KTable<K, R> leftJoin(KTable<K, V1> other, ValueJoiner<V, V1, R> joiner);
 
+    /**
+     * Reduce values of this table by the selected key.
+     *
+     * @param addReducer the class of Reducer
+     * @param removeReducer the class of Reducer
+     * @param selector the KeyValue mapper that select the aggregate key
+     * @param name the name of the resulted table
+     * @param <K1>   the key type of the aggregated table
+     * @param <V1>   the value type of the aggregated table
+     * @return the instance of KTable
+     */
+    <K1, V1> KTable<K1, V1> reduce(Reducer<V1> addReducer,
+                                   Reducer<V1> removeReducer,
+                                   KeyValueMapper<K, V, KeyValue<K1, V1>> selector,
+                                   Serializer<K1> keySerializer,
+                                   Serializer<V1> valueSerializer,
+                                   Deserializer<K1> keyDeserializer,
+                                   Deserializer<V1> valueDeserializer,
+                                   String name);
+
+    /**
+     * Aggregate values of this table by the selected key.
+     *
+     * @param aggregator the class of Aggregator
+     * @param selector the KeyValue mapper that select the aggregate key
+     * @param name the name of the resulted table
+     * @param <K1>   the key type of the aggregated table
+     * @param <V1>   the value type of the aggregated table
+     * @return the instance of KTable
+     */
+    <K1, V1, T> KTable<K1, T> aggregate(Aggregator<K1, V1, T> aggregator,
+                                        KeyValueMapper<K, V, KeyValue<K1, V1>> selector,
+                                        Serializer<K1> keySerializer,
+                                        Serializer<V1> valueSerializer,
+                                        Serializer<T> aggValueSerializer,
+                                        Deserializer<K1> keyDeserializer,
+                                        Deserializer<V1> valueDeserializer,
+                                        Deserializer<T> aggValueDeserializer,
+                                        String name);
 }

@@ -23,11 +23,13 @@ import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serializer;
-import org.apache.kafka.streams.StreamingConfig;
-import org.apache.kafka.streams.StreamingMetrics;
+import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateRestoreCallback;
 import org.apache.kafka.streams.processor.StateStore;
+import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.TaskId;
 import org.apache.kafka.streams.processor.internals.RecordCollector;
 import org.apache.kafka.test.MockProcessorContext;
@@ -47,7 +49,7 @@ import java.util.Set;
  * A component that provides a {@link #context() ProcessingContext} that can be supplied to a {@link KeyValueStore} so that
  * all entries written to the Kafka topic by the store during {@link KeyValueStore#flush()} are captured for testing purposes.
  * This class simplifies testing of various {@link KeyValueStore} instances, especially those that use
- * {@link MeteredKeyValueStore} to monitor and write its entries to the Kafka topic.
+ * {@link org.apache.kafka.streams.state.internals.MeteredKeyValueStore} to monitor and write its entries to the Kafka topic.
  * <p>
  * <h2>Basic usage</h2>
  * This component can be used to help test a {@link KeyValueStore}'s ability to read and write entries.
@@ -92,7 +94,7 @@ import java.util.Set;
  * <p>
  * <h2>Restoring a store</h2>
  * This component can be used to test whether a {@link KeyValueStore} implementation properly
- * {@link ProcessorContext#register(StateStore, StateRestoreCallback) registers itself} with the {@link ProcessorContext}, so that
+ * {@link ProcessorContext#register(StateStore, boolean, StateRestoreCallback) registers itself} with the {@link ProcessorContext}, so that
  * the persisted contents of a store are properly restored from the flushed entries when the store instance is started.
  * <p>
  * To do this, create an instance of this driver component, {@link #addEntryToRestoreLog(Object, Object) add entries} that will be
@@ -220,11 +222,10 @@ public class KeyValueStoreTestDriver<K, V> {
     private final Serdes<K, V> serdes;
     private final Map<K, V> flushedEntries = new HashMap<>();
     private final Set<K> flushedRemovals = new HashSet<>();
-    private final List<Entry<K, V>> restorableEntries = new LinkedList<>();
-    private final StreamingConfig config;
+    private final List<KeyValue<K, V>> restorableEntries = new LinkedList<>();
     private final MockProcessorContext context;
     private final Map<String, StateStore> storeMap = new HashMap<>();
-    private final StreamingMetrics metrics = new StreamingMetrics() {
+    private final StreamsMetrics metrics = new StreamsMetrics() {
         @Override
         public Sensor addLatencySensor(String scopeName, String entityName, String operationName, String... tags) {
             return null;
@@ -235,7 +236,7 @@ public class KeyValueStoreTestDriver<K, V> {
         }
     };
     private final RecordCollector recordCollector;
-    private File stateDir = new File("build/data").getAbsoluteFile();
+    private File stateDir = null;
 
     protected KeyValueStoreTestDriver(Serdes<K, V> serdes) {
         this.serdes = serdes;
@@ -246,17 +247,24 @@ public class KeyValueStoreTestDriver<K, V> {
             public <K1, V1> void send(ProducerRecord<K1, V1> record, Serializer<K1> keySerializer, Serializer<V1> valueSerializer) {
                 recordFlushed(record.key(), record.value());
             }
+            @Override
+            public <K1, V1> void send(ProducerRecord<K1, V1> record, Serializer<K1> keySerializer, Serializer<V1> valueSerializer,
+                                    StreamPartitioner<K1, V1> partitioner) {
+                recordFlushed(record.key(), record.value());
+            }
         };
-        Properties props = new Properties();
-        props.put(StreamingConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(StreamingConfig.TIMESTAMP_EXTRACTOR_CLASS_CONFIG, MockTimestampExtractor.class);
-        props.put(StreamingConfig.KEY_SERIALIZER_CLASS_CONFIG, serdes.keySerializer().getClass());
-        props.put(StreamingConfig.KEY_DESERIALIZER_CLASS_CONFIG, serdes.keyDeserializer().getClass());
-        props.put(StreamingConfig.VALUE_SERIALIZER_CLASS_CONFIG, serdes.valueSerializer().getClass());
-        props.put(StreamingConfig.VALUE_DESERIALIZER_CLASS_CONFIG, serdes.valueDeserializer().getClass());
-        this.config = new StreamingConfig(props);
+        this.stateDir = StateUtils.tempDir();
+        this.stateDir.mkdirs();
 
-        this.context = new MockProcessorContext(null, serdes.keySerializer(), serdes.keyDeserializer(), serdes.valueSerializer(),
+        Properties props = new Properties();
+        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(StreamsConfig.TIMESTAMP_EXTRACTOR_CLASS_CONFIG, MockTimestampExtractor.class);
+        props.put(StreamsConfig.KEY_SERIALIZER_CLASS_CONFIG, serdes.keySerializer().getClass());
+        props.put(StreamsConfig.KEY_DESERIALIZER_CLASS_CONFIG, serdes.keyDeserializer().getClass());
+        props.put(StreamsConfig.VALUE_SERIALIZER_CLASS_CONFIG, serdes.valueSerializer().getClass());
+        props.put(StreamsConfig.VALUE_DESERIALIZER_CLASS_CONFIG, serdes.valueDeserializer().getClass());
+
+        this.context = new MockProcessorContext(null, this.stateDir, serdes.keySerializer(), serdes.keyDeserializer(), serdes.valueSerializer(),
                 serdes.valueDeserializer(), recordCollector) {
             @Override
             public TaskId id() {
@@ -280,28 +288,15 @@ public class KeyValueStoreTestDriver<K, V> {
             }
 
             @Override
-            public StreamingMetrics metrics() {
+            public StreamsMetrics metrics() {
                 return metrics;
             }
 
             @Override
             public File stateDir() {
-                if (stateDir == null) {
-                    stateDir = StateUtils.tempDir();
-                }
-                stateDir.mkdirs();
                 return stateDir;
             }
         };
-    }
-
-    /**
-     * Set the directory that should be used by the store for local disk storage.
-     *
-     * @param dir the directory; may be null if no local storage is allowed
-     */
-    public void useStateDir(File dir) {
-        this.stateDir = dir;
     }
 
     @SuppressWarnings("unchecked")
@@ -319,10 +314,10 @@ public class KeyValueStoreTestDriver<K, V> {
     }
 
     private void restoreEntries(StateRestoreCallback func) {
-        for (Entry<K, V> entry : restorableEntries) {
+        for (KeyValue<K, V> entry : restorableEntries) {
             if (entry != null) {
-                byte[] rawKey = serdes.rawKey(entry.key());
-                byte[] rawValue = serdes.rawValue(entry.value());
+                byte[] rawKey = serdes.rawKey(entry.key);
+                byte[] rawValue = serdes.rawValue(entry.value);
                 func.restore(rawKey, rawValue);
             }
         }
@@ -358,7 +353,7 @@ public class KeyValueStoreTestDriver<K, V> {
      * @see #checkForRestoredEntries(KeyValueStore)
      */
     public void addEntryToRestoreLog(K key, V value) {
-        restorableEntries.add(new Entry<K, V>(key, value));
+        restorableEntries.add(new KeyValue<K, V>(key, value));
     }
 
     /**
@@ -382,7 +377,7 @@ public class KeyValueStoreTestDriver<K, V> {
      *
      * @return the restore entries; never null but possibly a null iterator
      */
-    public Iterable<Entry<K, V>> restoredEntries() {
+    public Iterable<KeyValue<K, V>> restoredEntries() {
         return restorableEntries;
     }
 
@@ -396,10 +391,10 @@ public class KeyValueStoreTestDriver<K, V> {
      */
     public int checkForRestoredEntries(KeyValueStore<K, V> store) {
         int missing = 0;
-        for (Entry<K, V> entry : restorableEntries) {
-            if (entry != null) {
-                V value = store.get(entry.key());
-                if (!Objects.equals(value, entry.value())) {
+        for (KeyValue<K, V> kv : restorableEntries) {
+            if (kv != null) {
+                V value = store.get(kv.key);
+                if (!Objects.equals(value, kv.value)) {
                     ++missing;
                 }
             }

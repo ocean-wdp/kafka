@@ -104,7 +104,7 @@ object TestUtils extends Logging {
     })
     f
   }
-  
+
   /**
    * Create a random log directory in the format <string>-<int> used for Kafka partition logs.
    * It is the responsibility of the caller to set up a shutdown hook for deletion of the directory.
@@ -213,6 +213,7 @@ object TestUtils extends Logging {
     props.put("controlled.shutdown.enable", enableControlledShutdown.toString)
     props.put("delete.topic.enable", enableDeleteTopic.toString)
     props.put("controlled.shutdown.retry.backoff.ms", "100")
+    props.put("log.cleaner.dedupe.buffer.size", "2097152")
 
     if (protocolAndPorts.exists { case (protocol, _) => usesSslTransportLayer(protocol) })
       props.putAll(sslConfigs(Mode.SERVER, false, trustStoreFile, s"server$nodeId"))
@@ -401,12 +402,12 @@ object TestUtils extends Logging {
   }
 
   /**
-   * Create a hexidecimal string for the given bytes
+   * Create a hexadecimal string for the given bytes
    */
   def hexString(bytes: Array[Byte]): String = hexString(ByteBuffer.wrap(bytes))
 
   /**
-   * Create a hexidecimal string for the given bytes
+   * Create a hexadecimal string for the given bytes
    */
   def hexString(buffer: ByteBuffer): String = {
     val builder = new StringBuilder("0x")
@@ -470,7 +471,7 @@ object TestUtils extends Logging {
     producerProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, maxBlockMs.toString)
     producerProps.put(ProducerConfig.BUFFER_MEMORY_CONFIG, bufferSize.toString)
     producerProps.put(ProducerConfig.RETRIES_CONFIG, retries.toString)
-        
+
     /* Only use these if not already set */
     val defaultProps = Map(
       ProducerConfig.RETRY_BACKOFF_MS_CONFIG -> "100",
@@ -711,7 +712,7 @@ object TestUtils extends Logging {
 
   /**
    * Execute the given block. If it throws an assert error, retry. Repeat
-   * until no error is thrown or the time limit ellapses
+   * until no error is thrown or the time limit elapses
    */
   def retry(maxWaitMs: Long)(block: => Unit) {
     var wait = 1L
@@ -798,6 +799,16 @@ object TestUtils extends Logging {
       waitTime = timeout)
 
     leader
+  }
+
+  def waitUntilLeaderIsKnown(servers: Seq[KafkaServer], topic: String, partition: Int, timeout: Long = 5000L): Unit = {
+    TestUtils.waitUntilTrue(() => 
+      servers.exists { server =>
+        server.replicaManager.getPartition(topic, partition).exists(_.leaderReplicaIfLocal().isDefined)
+      },
+      "Partition [%s,%d] leaders not made yet after %d ms".format(topic, partition, timeout),
+      waitTime = timeout
+    )
   }
 
   def writeNonsenseToFile(fileName: File, position: Long, size: Int) {

@@ -23,6 +23,9 @@ import java.io.StringWriter;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,7 +50,7 @@ public class Utils {
 
     // This matches URIs of formats: host:port and protocol:\\host:port
     // IPv6 is supported with [ip] pattern
-    private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-z\\-.:]*)\\]?:([0-9]+)");
+    private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-zA-Z\\-.:]*)\\]?:([0-9]+)");
 
     public static final String NL = System.getProperty("line.separator");
 
@@ -129,7 +132,7 @@ public class Utils {
 
     /**
      * Get the little-endian value of an integer as a byte array.
-     * @param val The value to convert to a litte-endian array
+     * @param val The value to convert to a little-endian array
      * @return The little-endian encoded array of bytes for the value
      */
     public static byte[] toArrayLE(int val) {
@@ -657,6 +660,26 @@ public class Utils {
             return getKafkaClassLoader();
         else
             return cl;
+    }
+
+    /**
+     * Attempts to move source to target atomically and falls back to a non-atomic move if it fails.
+     *
+     * @throws IOException if both atomic and non-atomic moves fail
+     */
+    public static void atomicMoveWithFallback(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException outer) {
+            try {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                log.debug("Non-atomic move of " + source + " to " + target + " succeeded after atomic move failed due to "
+                        + outer.getMessage());
+            } catch (IOException inner) {
+                inner.addSuppressed(outer);
+                throw inner;
+            }
+        }
     }
 
 }
