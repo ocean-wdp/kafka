@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.kafka.common.network;
 
 
@@ -26,24 +25,36 @@ import java.nio.channels.SelectionKey;
 
 import java.security.Principal;
 
+import org.apache.kafka.common.utils.Utils;
+
 public class KafkaChannel {
     private final String id;
     private final TransportLayer transportLayer;
     private final Authenticator authenticator;
+    // Tracks accumulated network thread time. This is updated on the network thread.
+    // The values are read and reset after each response is sent.
+    private long networkThreadTimeNanos;
     private final int maxReceiveSize;
     private NetworkReceive receive;
     private Send send;
+    // Track connection and mute state of channels to enable outstanding requests on channels to be
+    // processed after the channel is disconnected.
+    private boolean disconnected;
+    private boolean muted;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Authenticator authenticator, int maxReceiveSize) throws IOException {
         this.id = id;
         this.transportLayer = transportLayer;
         this.authenticator = authenticator;
+        this.networkThreadTimeNanos = 0L;
         this.maxReceiveSize = maxReceiveSize;
+        this.disconnected = false;
+        this.muted = false;
     }
 
     public void close() throws IOException {
-        transportLayer.close();
-        authenticator.close();
+        this.disconnected = true;
+        Utils.closeAll(transportLayer, authenticator);
     }
 
     /**
@@ -64,12 +75,13 @@ public class KafkaChannel {
     }
 
     public void disconnect() {
+        disconnected = true;
         transportLayer.disconnect();
     }
 
 
-    public void finishConnect() throws IOException {
-        transportLayer.finishConnect();
+    public boolean finishConnect() throws IOException {
+        return transportLayer.finishConnect();
     }
 
     public boolean isConnected() {
@@ -81,15 +93,22 @@ public class KafkaChannel {
     }
 
     public void mute() {
-        transportLayer.removeInterestOps(SelectionKey.OP_READ);
+        if (!disconnected)
+            transportLayer.removeInterestOps(SelectionKey.OP_READ);
+        muted = true;
     }
 
     public void unmute() {
-        transportLayer.addInterestOps(SelectionKey.OP_READ);
+        if (!disconnected)
+            transportLayer.addInterestOps(SelectionKey.OP_READ);
+        muted = false;
     }
 
+    /**
+     * Returns true if this channel has been explicitly muted using {@link KafkaChannel#mute()}
+     */
     public boolean isMute() {
-        return transportLayer.isMute();
+        return muted;
     }
 
     public boolean ready() {
@@ -149,6 +168,23 @@ public class KafkaChannel {
         return result;
     }
 
+    /**
+     * Accumulates network thread time for this channel.
+     */
+    public void addNetworkThreadTimeNanos(long nanos) {
+        networkThreadTimeNanos += nanos;
+    }
+
+    /**
+     * Returns accumulated network thread time for this channel and resets
+     * the value to zero.
+     */
+    public long getAndResetNetworkThreadTimeNanos() {
+        long current = networkThreadTimeNanos;
+        networkThreadTimeNanos = 0;
+        return current;
+    }
+
     private long receive(NetworkReceive receive) throws IOException {
         return receive.readFrom(transportLayer);
     }
@@ -160,5 +196,4 @@ public class KafkaChannel {
 
         return send.completed();
     }
-
 }

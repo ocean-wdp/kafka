@@ -17,15 +17,14 @@
 
 package kafka.api.test
 
-import java.util.{Properties, Collection, ArrayList}
+import java.util.{ArrayList, Collection, Properties}
 
 import org.junit.runners.Parameterized
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized.Parameters
 import org.junit.{After, Before, Test}
-import org.apache.kafka.clients.producer.{ProducerRecord, KafkaProducer, ProducerConfig}
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.junit.Assert._
-
 import kafka.api.FetchRequestBuilder
 import kafka.server.{KafkaConfig, KafkaServer}
 import kafka.consumer.SimpleConsumer
@@ -55,7 +54,7 @@ class ProducerCompressionTest(compression: String) extends ZooKeeperTestHarness 
   @After
   override def tearDown() {
     server.shutdown
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
     super.tearDown()
   }
 
@@ -75,7 +74,7 @@ class ProducerCompressionTest(compression: String) extends ZooKeeperTestHarness 
     props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
     props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer")
     var producer = new KafkaProducer[Array[Byte],Array[Byte]](props)
-    val consumer = new SimpleConsumer("localhost", server.boundPort(), 100, 1024*1024, "")
+    val consumer = new SimpleConsumer("localhost", TestUtils.boundPort(server), 100, 1024*1024, "")
 
     try {
       // create topic
@@ -87,8 +86,9 @@ class ProducerCompressionTest(compression: String) extends ZooKeeperTestHarness 
         yield ("value" + i).getBytes
 
       // make sure the returned messages are correct
+      val now = System.currentTimeMillis()
       val responses = for (message <- messages)
-        yield producer.send(new ProducerRecord[Array[Byte],Array[Byte]](topic, null, null, message))
+        yield producer.send(new ProducerRecord[Array[Byte],Array[Byte]](topic, null, now, null, message))
       val futures = responses.toList
       for ((future, offset) <- futures zip (0 until numRecords)) {
         assertEquals(offset.toLong, future.get.offset)
@@ -101,7 +101,7 @@ class ProducerCompressionTest(compression: String) extends ZooKeeperTestHarness 
 
       var index = 0
       for (message <- messages) {
-        assertEquals(new Message(bytes = message), messageSet(index).message)
+        assertEquals(new Message(bytes = message, now, Message.MagicValue_V1), messageSet(index).message)
         assertEquals(index.toLong, messageSet(index).offset)
         index += 1
       }

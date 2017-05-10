@@ -14,12 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package unit.kafka.admin
+package kafka.admin
 
-import java.io.StringReader
 import java.util.Properties
 
-import kafka.admin.AclCommand
+import kafka.admin.AclCommand.AclCommandOptions
 import kafka.security.auth._
 import kafka.server.KafkaConfig
 import kafka.utils.{Logging, TestUtils}
@@ -44,9 +43,9 @@ class AclCommandTest extends ZooKeeperTestHarness with Logging {
   )
 
   private val ResourceToOperations = Map[Set[Resource], (Set[Operation], Array[String])](
-    TopicResources -> (Set(Read, Write, Describe), Array("--operation", "Read" , "--operation", "Write", "--operation", "Describe")),
+    TopicResources -> (Set(Read, Write, Describe, Delete), Array("--operation", "Read" , "--operation", "Write", "--operation", "Describe", "--operation", "Delete")),
     Set(Resource.ClusterResource) -> (Set(Create, ClusterAction), Array("--operation", "Create", "--operation", "ClusterAction")),
-    GroupResources -> (Set(Read).toSet[Operation], Array("--operation", "Read"))
+    GroupResources -> (Set(Read, Describe), Array("--operation", "Read", "--operation", "Describe"))
   )
 
   private val ProducerResourceToAcls = Map[Set[Resource], Set[Acl]](
@@ -108,14 +107,18 @@ class AclCommandTest extends ZooKeeperTestHarness with Logging {
     }
   }
 
+  @Test (expected = classOf[IllegalArgumentException])
+  def testInvalidAuthorizerProperty() {
+    val args = Array("--authorizer-properties", "zookeeper.connect " + zkConnect)
+    AclCommand.withAuthorizer(new AclCommandOptions(args))(null)
+  }
+
   private def testRemove(resources: Set[Resource], resourceCmd: Array[String], args: Array[String], brokerProps: Properties) {
     for (resource <- resources) {
-      Console.withIn(new StringReader(s"y${AclCommand.Newline}" * resources.size)) {
-        AclCommand.main(args ++ resourceCmd :+ "--remove")
+        AclCommand.main(args ++ resourceCmd :+ "--remove" :+ "--force")
         withAuthorizer(brokerProps) { authorizer =>
           TestUtils.waitAndVerifyAcls(Set.empty[Acl], authorizer, resource)
         }
-      }
     }
   }
 

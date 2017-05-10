@@ -18,14 +18,18 @@
 package kafka.common
 
 import util.matching.Regex
-import kafka.coordinator.GroupCoordinator
+
+import scala.collection.immutable
 
 object Topic {
-  val legalChars = "[a-zA-Z0-9\\._\\-]"
-  private val maxNameLength = 255
-  private val rgx = new Regex(legalChars + "+")
 
-  val InternalTopics = Set(GroupCoordinator.GroupMetadataTopicName)
+  val GroupMetadataTopicName = "__consumer_offsets"
+  val TransactionStateTopicName = "__transaction_state"
+  val InternalTopics = immutable.Set(GroupMetadataTopicName, TransactionStateTopicName)
+
+  val legalChars = "[a-zA-Z0-9\\._\\-]"
+  private val maxNameLength = 249
+  private val rgx = new Regex(legalChars + "+")
 
   def validate(topic: String) {
     if (topic.length <= 0)
@@ -63,5 +67,8 @@ object Topic {
   def hasCollision(topicA: String, topicB: String): Boolean = {
     topicA.replace('.', '_') == topicB.replace('.', '_')
   }
+
+  def isInternal(topic: String): Boolean =
+    InternalTopics.contains(topic)
 
 }

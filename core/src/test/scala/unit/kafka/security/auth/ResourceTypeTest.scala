@@ -14,10 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package unit.kafka.security.auth
+package kafka.security.auth
 
 import kafka.common.KafkaException
-import kafka.security.auth.{ResourceType, Topic}
 import org.junit.{Test, Assert}
 import org.scalatest.junit.JUnitSuite
 
@@ -32,7 +31,7 @@ class ResourceTypeTest extends JUnitSuite {
       ResourceType.fromString("badName")
       fail("Expected exception on invalid ResourceType name.")
     } catch {
-      case e: KafkaException => // expected
+      case _: KafkaException => // expected
     }
   }
 

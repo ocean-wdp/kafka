@@ -20,19 +20,16 @@ package kafka.controller
 import java.util.Properties
 import java.util.concurrent.LinkedBlockingQueue
 
-import kafka.api.RequestOrResponse
 import kafka.common.TopicAndPartition
 import kafka.integration.KafkaServerTestHarness
 import kafka.server.{KafkaConfig, KafkaServer}
 import kafka.utils._
 import org.apache.kafka.common.metrics.Metrics
-import org.apache.kafka.common.requests.{AbstractRequestResponse, AbstractRequest}
-import org.apache.kafka.common.utils.SystemTime
+import org.apache.kafka.common.utils.Time
 import org.apache.log4j.{Level, Logger}
-import org.junit.{After, Before, Test}
+import org.junit.{After, Ignore, Test}
 
 import scala.collection.mutable
-
 
 class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
   val log = Logger.getLogger(classOf[ControllerFailoverTest])
@@ -47,11 +44,6 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
   override def generateConfigs() = TestUtils.createBrokerConfigs(numNodes, zkConnect)
     .map(KafkaConfig.fromProps(_, overridingProps))
 
-  @Before
-  override def setUp() {
-    super.setUp()
-  }
-
   @After
   override def tearDown() {
     super.tearDown()
@@ -62,15 +54,16 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
    * See @link{https://issues.apache.org/jira/browse/KAFKA-2300}
    * for the background of this test case
    */
+  @Ignore // This needs to be reworked as described here: https://github.com/apache/kafka/pull/2935#discussion_r114374412
   @Test
   def testMetadataUpdate() {
     log.setLevel(Level.INFO)
-    var controller: KafkaServer = this.servers.head;
+    var controller: KafkaServer = this.servers.head
     // Find the current controller
     val epochMap: mutable.Map[Int, Int] = mutable.Map.empty
     for (server <- this.servers) {
       epochMap += (server.config.brokerId -> server.kafkaController.epoch)
-      if(server.kafkaController.isActive()) {
+      if(server.kafkaController.isActive) {
         controller = server
       }
     }
@@ -100,9 +93,7 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
           controller.kafkaController.sendUpdateMetadataRequest(Seq(0), Set(topicPartition))
           log.info("Queue state %d %d".format(channelManager.queueCapacity(0), channelManager.queueSize(0)))
         } catch {
-          case e : Exception => {
-            log.info("Thread interrupted")
-          }
+          case _: Exception => log.info("Thread interrupted")
         }
       }
     })
@@ -121,7 +112,7 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
     var counter = 0
     while (!found && counter < 10) {
       for (server <- this.servers) {
-        val previousEpoch = (epochMap get server.config.brokerId) match {
+        val previousEpoch = epochMap get server.config.brokerId match {
           case Some(epoch) =>
             epoch
           case None =>
@@ -130,7 +121,7 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
         }
 
         if (server.kafkaController.isActive
-            && (previousEpoch) < server.kafkaController.epoch) {
+            && previousEpoch < server.kafkaController.epoch) {
           controller = server
           found = true
         }
@@ -152,7 +143,7 @@ class ControllerFailoverTest extends KafkaServerTestHarness with Logging {
 }
 
 class MockChannelManager(private val controllerContext: ControllerContext, config: KafkaConfig, metrics: Metrics)
-  extends ControllerChannelManager(controllerContext, config, new SystemTime, metrics) {
+  extends ControllerChannelManager(controllerContext, config, Time.SYSTEM, metrics) {
 
   def stopSendThread(brokerId: Int) {
     val requestThread = brokerStateInfo(brokerId).requestSendThread

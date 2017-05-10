@@ -27,9 +27,9 @@ class ZkNodeChangeNotificationListenerTest extends KafkaServerTestHarness {
 
   @Test
   def testProcessNotification() {
+    @volatile var notification: String = null
+    @volatile var invocationCount = 0
     val notificationHandler = new NotificationHandler {
-      @volatile var notification: String = _
-      @volatile var invocationCount: Integer = 0
       override def processNotification(notificationMessage: String): Unit = {
         notification = notificationMessage
         invocationCount += 1
@@ -48,14 +48,14 @@ class ZkNodeChangeNotificationListenerTest extends KafkaServerTestHarness {
 
     zkUtils.createSequentialPersistentPath(seqNodePath, notificationMessage1)
 
-    TestUtils.waitUntilTrue(() => notificationHandler.invocationCount == 1 && notificationHandler.notification == notificationMessage1, "failed to send/process notification message in the timeout period.")
+    TestUtils.waitUntilTrue(() => invocationCount == 1 && notification == notificationMessage1, "failed to send/process notification message in the timeout period.")
 
     /*There is no easy way to test that purging. Even if we mock kafka time with MockTime, the purging compares kafka time with the time stored in zookeeper stat and the
-    embeded zookeeper server does not provide a way to mock time. so to test purging we will have to use SystemTime.sleep(changeExpirationMs + 1) issue a write and check
+    embeded zookeeper server does not provide a way to mock time. so to test purging we will have to use Time.SYSTEM.sleep(changeExpirationMs + 1) issue a write and check
     Assert.assertEquals(1, ZkUtils.getChildren(zkClient, seqNodeRoot).size) however even after that the assertion can fail as the second node it self can be deleted
     depending on how threads get scheduled.*/
 
     zkUtils.createSequentialPersistentPath(seqNodePath, notificationMessage2)
-    TestUtils.waitUntilTrue(() => notificationHandler.invocationCount == 2 && notificationHandler.notification == notificationMessage2, "failed to send/process notification message in the timeout period.")
+    TestUtils.waitUntilTrue(() => invocationCount == 2 && notification == notificationMessage2, "failed to send/process notification message in the timeout period.")
   }
 }

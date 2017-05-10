@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package kafka.consumer
+package kafka.metrics
 
 import java.util.Properties
 
 import com.yammer.metrics.Metrics
-import com.yammer.metrics.core.MetricPredicate
+import com.yammer.metrics.core.{Metric, MetricName, MetricPredicate}
 import org.junit.{After, Test}
 import org.junit.Assert._
 import kafka.integration.KafkaServerTestHarness
@@ -29,9 +29,11 @@ import kafka.serializer._
 import kafka.utils._
 import kafka.admin.AdminUtils
 import kafka.utils.TestUtils._
+
 import scala.collection._
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
 import scala.util.matching.Regex
+import kafka.consumer.{ConsumerConfig, ZookeeperConsumerConnector}
 
 class MetricsTest extends KafkaServerTestHarness with Logging {
   val numNodes = 2
@@ -52,6 +54,7 @@ class MetricsTest extends KafkaServerTestHarness with Logging {
   }
 
   @Test
+  @deprecated("This test has been deprecated and it will be removed in a future release", "0.10.0.0")
   def testMetricsLeak() {
     // create topic topic1 with 1 partition on broker 0
     createTopic(zkUtils, topic, numPartitions = 1, replicationFactor = 1, servers = servers)
@@ -78,13 +81,32 @@ class MetricsTest extends KafkaServerTestHarness with Logging {
     assertFalse("Topic metrics exists after deleteTopic", checkTopicMetricsExists(topic))
   }
 
+  @Test
+  def testBrokerTopicMetricsUnregisteredAfterDeletingTopic() {
+    val topic = "test-broker-topic-metric"
+    AdminUtils.createTopic(zkUtils, topic, 2, 1)
+    createAndShutdownStep("group0", "consumer0", "producer0")
+    assertNotNull(BrokerTopicStats.getBrokerTopicStats(topic))
+    AdminUtils.deleteTopic(zkUtils, topic)
+    TestUtils.verifyTopicDeletion(zkUtils, topic, 1, servers)
+    assertFalse("Topic metrics exists after deleteTopic", checkTopicMetricsExists(topic))
+  }
+
+  @Test
+  def testClusterIdMetric(): Unit ={
+    // Check if clusterId metric exists.
+    val metrics = Metrics.defaultRegistry().allMetrics
+    assertEquals(metrics.keySet.asScala.count(_.getMBeanName().equals("kafka.server:type=KafkaServer,name=ClusterId")), 1)
+  }
+
+  @deprecated("This test has been deprecated and it will be removed in a future release", "0.10.0.0")
   def createAndShutdownStep(group: String, consumerId: String, producerId: String): Unit = {
-    val sentMessages1 = sendMessages(servers, topic, nMessages)
+    sendMessages(servers, topic, nMessages)
     // create a consumer
     val consumerConfig1 = new ConsumerConfig(TestUtils.createConsumerProperties(zkConnect, group, consumerId))
     val zkConsumerConnector1 = new ZookeeperConsumerConnector(consumerConfig1, true)
     val topicMessageStreams1 = zkConsumerConnector1.createMessageStreams(Map(topic -> 1), new StringDecoder(), new StringDecoder())
-    val receivedMessages1 = getMessages(topicMessageStreams1, nMessages)
+    getMessages(topicMessageStreams1, nMessages)
 
     zkConsumerConnector1.shutdown()
   }
@@ -92,7 +114,7 @@ class MetricsTest extends KafkaServerTestHarness with Logging {
   private def checkTopicMetricsExists(topic: String): Boolean = {
     val topicMetricRegex = new Regex(".*("+topic+")$")
     val metricGroups = Metrics.defaultRegistry().groupedMetrics(MetricPredicate.ALL).entrySet()
-    for(metricGroup <- metricGroups) {
+    for(metricGroup <- metricGroups.asScala) {
       if (topicMetricRegex.pattern.matcher(metricGroup.getKey()).matches)
         return true
     }

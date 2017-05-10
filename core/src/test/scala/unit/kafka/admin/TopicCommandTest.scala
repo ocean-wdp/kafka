@@ -16,18 +16,18 @@
  */
 package kafka.admin
 
-import junit.framework.Assert._
-import kafka.common.TopicExistsException
+import org.junit.Assert._
 import org.junit.Test
+import kafka.common.Topic
 import kafka.utils.Logging
 import kafka.utils.TestUtils
 import kafka.zk.ZooKeeperTestHarness
 import kafka.server.ConfigType
 import kafka.admin.TopicCommand.TopicCommandOptions
 import kafka.utils.ZkUtils._
-import kafka.coordinator.GroupCoordinator
+import org.apache.kafka.common.errors.TopicExistsException
 
-class TopicCommandTest extends ZooKeeperTestHarness with Logging {
+class TopicCommandTest extends ZooKeeperTestHarness with Logging with RackAwareTest {
 
   @Test
   def testConfigPreservationAcrossPartitionAlteration() {
@@ -49,7 +49,7 @@ class TopicCommandTest extends ZooKeeperTestHarness with Logging {
     assertTrue("Properties after creation have incorrect value", props.getProperty(cleanupKey).equals(cleanupVal))
 
     // pre-create the topic config changes path to avoid a NoNodeException
-    zkUtils.createPersistentPath(EntityConfigChangesPath)
+    zkUtils.createPersistentPath(ConfigChangesPath)
 
     // modify the topic to add new partitions
     val numPartitionsModified = 3
@@ -86,12 +86,12 @@ class TopicCommandTest extends ZooKeeperTestHarness with Logging {
     // create the offset topic
     val createOffsetTopicOpts = new TopicCommandOptions(Array("--partitions", numPartitionsOriginal.toString,
       "--replication-factor", "1",
-      "--topic", GroupCoordinator.GroupMetadataTopicName))
+      "--topic", Topic.GroupMetadataTopicName))
     TopicCommand.createTopic(zkUtils, createOffsetTopicOpts)
 
-    // try to delete the GroupCoordinator.GroupMetadataTopicName and make sure it doesn't
-    val deleteOffsetTopicOpts = new TopicCommandOptions(Array("--topic", GroupCoordinator.GroupMetadataTopicName))
-    val deleteOffsetTopicPath = getDeleteTopicPath(GroupCoordinator.GroupMetadataTopicName)
+    // try to delete the Topic.GroupMetadataTopicName and make sure it doesn't
+    val deleteOffsetTopicOpts = new TopicCommandOptions(Array("--topic", Topic.GroupMetadataTopicName))
+    val deleteOffsetTopicPath = getDeleteTopicPath(Topic.GroupMetadataTopicName)
     assertFalse("Delete path for topic shouldn't exist before deletion.", zkUtils.zkClient.exists(deleteOffsetTopicPath))
     intercept[AdminOperationException] {
         TopicCommand.deleteTopic(zkUtils, deleteOffsetTopicOpts)
@@ -156,5 +156,35 @@ class TopicCommandTest extends ZooKeeperTestHarness with Logging {
     val createNotExistsOpts = new TopicCommandOptions(
       Array("--partitions", numPartitions.toString, "--replication-factor", "1", "--topic", topic, "--if-not-exists"))
     TopicCommand.createTopic(zkUtils, createNotExistsOpts)
+  }
+
+  @Test
+  def testCreateAlterTopicWithRackAware() {
+    val rackInfo = Map(0 -> "rack1", 1 -> "rack2", 2 -> "rack2", 3 -> "rack1", 4 -> "rack3", 5 -> "rack3")
+    TestUtils.createBrokersInZk(toBrokerMetadata(rackInfo), zkUtils)
+
+    val numPartitions = 18
+    val replicationFactor = 3
+    val createOpts = new TopicCommandOptions(Array(
+      "--partitions", numPartitions.toString,
+      "--replication-factor", replicationFactor.toString,
+      "--topic", "foo"))
+    TopicCommand.createTopic(zkUtils, createOpts)
+
+    var assignment = zkUtils.getReplicaAssignmentForTopics(Seq("foo")).map { case (tp, replicas) =>
+      tp.partition -> replicas
+    }
+    checkReplicaDistribution(assignment, rackInfo, rackInfo.size, numPartitions, replicationFactor)
+
+    val alteredNumPartitions = 36
+    // verify that adding partitions will also be rack aware
+    val alterOpts = new TopicCommandOptions(Array(
+      "--partitions", alteredNumPartitions.toString,
+      "--topic", "foo"))
+    TopicCommand.alterTopic(zkUtils, alterOpts)
+    assignment = zkUtils.getReplicaAssignmentForTopics(Seq("foo")).map { case (tp, replicas) =>
+      tp.partition -> replicas
+    }
+    checkReplicaDistribution(assignment, rackInfo, rackInfo.size, alteredNumPartitions, replicationFactor)
   }
 }

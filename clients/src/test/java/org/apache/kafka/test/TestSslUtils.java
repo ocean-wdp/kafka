@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -14,12 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.kafka.test;
 
 import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.common.network.Mode;
-import org.apache.kafka.clients.CommonClientConfigs;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -116,11 +114,8 @@ public class TestSslUtils {
 
     private static void saveKeyStore(KeyStore ks, String filename,
                                      Password password) throws GeneralSecurityException, IOException {
-        FileOutputStream out = new FileOutputStream(filename);
-        try {
+        try (FileOutputStream out = new FileOutputStream(filename)) {
             ks.store(out, password.value().toCharArray());
-        } finally {
-            out.close();
         }
     }
 
@@ -154,21 +149,11 @@ public class TestSslUtils {
         saveKeyStore(ks, filename, password);
     }
 
-    public static void createTrustStore(String filename,
-                                        Password password, String alias,
-                                        Certificate cert) throws GeneralSecurityException, IOException {
-        KeyStore ks = createEmptyKeyStore();
-        ks.setCertificateEntry(alias, cert);
-        saveKeyStore(ks, filename, password);
-    }
-
     public static <T extends Certificate> void createTrustStore(
             String filename, Password password, Map<String, T> certs) throws GeneralSecurityException, IOException {
         KeyStore ks = KeyStore.getInstance("JKS");
-        try {
-            FileInputStream in = new FileInputStream(filename);
+        try (FileInputStream in = new FileInputStream(filename)) {
             ks.load(in, password.value().toCharArray());
-            in.close();
         } catch (EOFException e) {
             ks = createEmptyKeyStore();
         }
@@ -178,18 +163,9 @@ public class TestSslUtils {
         saveKeyStore(ks, filename, password);
     }
 
-    public static Map<String, X509Certificate> createX509Certificates(KeyPair keyPair)
-        throws GeneralSecurityException {
-        Map<String, X509Certificate> certs = new HashMap<String, X509Certificate>();
-        X509Certificate cert = generateCertificate("CN=localhost, O=localhost", keyPair, 30, "SHA1withRSA");
-        certs.put("localhost", cert);
-        return certs;
-    }
-
-    public static Map<String, Object> createSslConfig(Mode mode, File keyStoreFile, Password password, Password keyPassword,
-                                                      File trustStoreFile, Password trustStorePassword) {
+    private static Map<String, Object> createSslConfig(Mode mode, File keyStoreFile, Password password, Password keyPassword,
+                                                       File trustStoreFile, Password trustStorePassword) {
         Map<String, Object> sslConfigs = new HashMap<>();
-        sslConfigs.put(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, "SSL"); // kafka security protocol
         sslConfigs.put(SslConfigs.SSL_PROTOCOL_CONFIG, "TLSv1.2"); // protocol to create SSLContext
 
         if (mode == Mode.SERVER || (mode == Mode.CLIENT && keyStoreFile != null)) {
@@ -219,39 +195,35 @@ public class TestSslUtils {
 
     public static  Map<String, Object> createSslConfig(boolean useClientCert, boolean trustStore, Mode mode, File trustStoreFile, String certAlias, String host)
         throws IOException, GeneralSecurityException {
-        Map<String, X509Certificate> certs = new HashMap<String, X509Certificate>();
-        File keyStoreFile;
-        Password password;
-
-        if (mode == Mode.SERVER)
-            password = new Password("ServerPassword");
-        else
-            password = new Password("ClientPassword");
+        Map<String, X509Certificate> certs = new HashMap<>();
+        File keyStoreFile = null;
+        Password password = mode == Mode.SERVER ? new Password("ServerPassword") : new Password("ClientPassword");
 
         Password trustStorePassword = new Password("TrustStorePassword");
 
-        if (useClientCert) {
+        if (mode == Mode.CLIENT && useClientCert) {
             keyStoreFile = File.createTempFile("clientKS", ".jks");
             KeyPair cKP = generateKeyPair("RSA");
-            X509Certificate cCert = generateCertificate("CN=" + host + ", O=client", cKP, 30, "SHA1withRSA");
+            X509Certificate cCert = generateCertificate("CN=" + host + ", O=A client", cKP, 30, "SHA1withRSA");
             createKeyStore(keyStoreFile.getPath(), password, "client", cKP.getPrivate(), cCert);
             certs.put(certAlias, cCert);
-        } else {
+            keyStoreFile.deleteOnExit();
+        } else if (mode == Mode.SERVER) {
             keyStoreFile = File.createTempFile("serverKS", ".jks");
             KeyPair sKP = generateKeyPair("RSA");
-            X509Certificate sCert = generateCertificate("CN=" + host + ", O=server", sKP, 30,
+            X509Certificate sCert = generateCertificate("CN=" + host + ", O=A server", sKP, 30,
                                                         "SHA1withRSA");
             createKeyStore(keyStoreFile.getPath(), password, password, "server", sKP.getPrivate(), sCert);
             certs.put(certAlias, sCert);
+            keyStoreFile.deleteOnExit();
         }
 
         if (trustStore) {
             createTrustStore(trustStoreFile.getPath(), trustStorePassword, certs);
+            trustStoreFile.deleteOnExit();
         }
 
-        Map<String, Object> sslConfig = createSslConfig(mode, keyStoreFile, password,
-                                                        password, trustStoreFile, trustStorePassword);
-        return sslConfig;
+        return createSslConfig(mode, keyStoreFile, password, password, trustStoreFile, trustStorePassword);
     }
 
 }

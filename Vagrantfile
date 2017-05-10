@@ -22,6 +22,8 @@ VAGRANTFILE_API_VERSION = "2"
 
 # General config
 enable_dns = false
+# Override to false when bringing up a cluster on AWS
+enable_hostmanager = true
 enable_jmx = false
 num_zookeepers = 1
 num_brokers = 3
@@ -53,27 +55,9 @@ if File.exists?(local_config_file) then
   eval(File.read(local_config_file), binding, "Vagrantfile.local")
 end
 
-# This is a horrible hack to work around bad interactions between
-# vagrant-hostmanager and vagrant-aws/vagrant's implementation. Hostmanager
-# wants to update the /etc/hosts entries, but tries to do so even on nodes that
-# aren't up (e.g. even when all nodes are stopped and you run vagrant
-# destroy). Because of the way the underlying code in vagrant works, it still
-# tries to communicate with the node and has to wait for a very long
-# timeout. This modifies the update to check for hosts that are not created or
-# stopped, skipping the update in that case since it's impossible to update
-# nodes in that state.
-Object.const_get("VagrantPlugins").const_get("HostManager").const_get("HostsFile").class_eval do
-  def update_guest(machine)
-    state_id = machine.state.id
-    return if state_id == :not_created || state_id == :stopped
-    old_update_guest(machine)
-  end
-  alias_method :old_update_guest, :update_guest
-end
-
 # TODO(ksweeney): RAM requirements are not empirical and can probably be significantly lowered.
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.hostmanager.enabled = true
+  config.hostmanager.enabled = enable_hostmanager
   config.hostmanager.manage_host = enable_dns
   config.hostmanager.include_offline = false
 
@@ -115,9 +99,11 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       if !cached_addresses.has_key?(vm.name)
         state_id = vm.state.id
         if state_id != :not_created && state_id != :stopped && vm.communicate.ready?
-          vm.communicate.execute("/sbin/ifconfig eth0 | grep 'inet addr' | tail -n 1 | egrep -o '[0-9\.]+' | head -n 1 2>&1") do |type, contents|
-            cached_addresses[vm.name] = contents.split("\n").first[/(\d+\.\d+\.\d+\.\d+)/, 1]
+          contents = ''
+          vm.communicate.execute("/sbin/ifconfig eth0 | grep 'inet addr' | tail -n 1 | egrep -o '[0-9\.]+' | head -n 1 2>&1") do |type, data|
+            contents << data
           end
+          cached_addresses[vm.name] = contents.split("\n").first[/(\d+\.\d+\.\d+\.\d+)/, 1]
         else
           cached_addresses[vm.name] = nil
         end
@@ -149,7 +135,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     end
 
     # Exclude some directories that can grow very large from syncing
-    override.vm.synced_folder ".", "/vagrant", type: "rsync", :rsync_excludes => ['.git', 'core/data/', 'logs/', 'tests/results/', 'results/']
+    override.vm.synced_folder ".", "/vagrant", type: "rsync", rsync__exclude: ['.git', 'core/data/', 'logs/', 'tests/results/', 'results/']
   end
 
   def name_node(node, name, ec2_instance_name_prefix)

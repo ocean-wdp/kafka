@@ -1,25 +1,23 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * <p>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.kafka.streams.processor.internals;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.StreamsMetrics;
@@ -38,72 +36,104 @@ import java.util.Map;
 public class StandbyTask extends AbstractTask {
 
     private static final Logger log = LoggerFactory.getLogger(StandbyTask.class);
-
     private final Map<TopicPartition, Long> checkpointedOffsets;
 
     /**
      * Create {@link StandbyTask} with its assigned partitions
      *
-     * @param id                    the ID of this task
-     * @param jobId                 the ID of the job
-     * @param partitions            the collection of assigned {@link TopicPartition}
-     * @param topology              the instance of {@link ProcessorTopology}
-     * @param consumer              the instance of {@link Consumer}
-     * @param restoreConsumer       the instance of {@link Consumer} used when restoring state
-     * @param config                the {@link StreamsConfig} specified by the user
-     * @param metrics               the {@link StreamsMetrics} created by the thread
+     * @param id             the ID of this task
+     * @param applicationId  the ID of the stream processing application
+     * @param partitions     the collection of assigned {@link TopicPartition}
+     * @param topology       the instance of {@link ProcessorTopology}
+     * @param consumer       the instance of {@link Consumer}
+     * @param config         the {@link StreamsConfig} specified by the user
+     * @param metrics        the {@link StreamsMetrics} created by the thread
+     * @param stateDirectory the {@link StateDirectory} created by the thread
      */
-    public StandbyTask(TaskId id,
-                       String jobId,
-                       Collection<TopicPartition> partitions,
-                       ProcessorTopology topology,
-                       Consumer<byte[], byte[]> consumer,
-                       Consumer<byte[], byte[]> restoreConsumer,
-                       StreamsConfig config,
-                       StreamsMetrics metrics) {
-        super(id, jobId, partitions, topology, consumer, restoreConsumer, config, true);
+    StandbyTask(final TaskId id,
+                final String applicationId,
+                final Collection<TopicPartition> partitions,
+                final ProcessorTopology topology,
+                final Consumer<byte[], byte[]> consumer,
+                final ChangelogReader changelogReader,
+                final StreamsConfig config,
+                final StreamsMetrics metrics,
+                final StateDirectory stateDirectory) {
+        super(id, applicationId, partitions, topology, consumer, changelogReader, true, stateDirectory, null);
 
         // initialize the topology with its own context
-        this.processorContext = new StandbyContextImpl(id, config, stateMgr, metrics);
+        processorContext = new StandbyContextImpl(id, applicationId, config, stateMgr, metrics);
 
+        log.debug("{} Initializing", logPrefix);
         initializeStateStores();
-
-        ((StandbyContextImpl) this.processorContext).initialized();
-
-        this.checkpointedOffsets = Collections.unmodifiableMap(stateMgr.checkpointedOffsets());
-
-        // set initial offset limits
-        initializeOffsetLimits();
+        processorContext.initialized();
+        checkpointedOffsets = Collections.unmodifiableMap(stateMgr.checkpointed());
     }
 
-    public Map<TopicPartition, Long> checkpointedOffsets() {
-        return checkpointedOffsets;
+    /**
+     * <pre>
+     * - update offset limits
+     * </pre>
+     */
+    @Override
+    public void resume() {
+        log.debug("{} " + "Resuming", logPrefix);
+        updateOffsetLimits();
     }
 
-    public Collection<TopicPartition> changeLogPartitions() {
-        return checkpointedOffsets.keySet();
+    /**
+     * <pre>
+     * - flush store
+     * - checkpoint store
+     * - update offset limits
+     * </pre>
+     */
+    @Override
+    public void commit() {
+        log.trace("{} Committing", logPrefix);
+        stateMgr.flush();
+        stateMgr.checkpoint(Collections.<TopicPartition, Long>emptyMap());
+        // reinitialize offset limits
+        updateOffsetLimits();
+    }
+
+    /**
+     * <pre>
+     * - flush store
+     * - checkpoint store
+     * </pre>
+     */
+    @Override
+    public void suspend() {
+        log.debug("{} Suspending", logPrefix);
+        stateMgr.flush();
+        stateMgr.checkpoint(Collections.<TopicPartition, Long>emptyMap());
+    }
+
+    @Override
+    public void close() {
+        log.debug("{} Closing", logPrefix);
+        boolean committedSuccessfully = false;
+        try {
+            commit();
+            committedSuccessfully = true;
+        } finally {
+            closeStateManager(committedSuccessfully);
+        }
     }
 
     /**
      * Updates a state store using records from one change log partition
+     *
      * @return a list of records not consumed
      */
-    public List<ConsumerRecord<byte[], byte[]>> update(TopicPartition partition, List<ConsumerRecord<byte[], byte[]>> records) {
+    public List<ConsumerRecord<byte[], byte[]>> update(final TopicPartition partition, final List<ConsumerRecord<byte[], byte[]>> records) {
+        log.debug("{} Updating standby replicas of its state store for partition [{}]", logPrefix, partition);
         return stateMgr.updateStandbyStates(partition, records);
     }
 
-    public void commit() {
-        stateMgr.flush();
-
-        // reinitialize offset limits
-        initializeOffsetLimits();
-    }
-
-    protected void initializeOffsetLimits() {
-        for (TopicPartition partition : partitions) {
-            OffsetAndMetadata metadata = consumer.committed(partition); // TODO: batch API?
-            stateMgr.putOffsetLimit(partition, metadata != null ? metadata.offset() : 0L);
-        }
+    Map<TopicPartition, Long> checkpointedOffsets() {
+        return checkpointedOffsets;
     }
 
 }

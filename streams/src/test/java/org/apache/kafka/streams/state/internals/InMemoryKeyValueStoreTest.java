@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -16,8 +16,6 @@
  */
 package org.apache.kafka.streams.state.internals;
 
-import org.apache.kafka.common.serialization.Deserializer;
-import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateStoreSupplier;
 import org.apache.kafka.streams.state.KeyValueStore;
@@ -29,22 +27,19 @@ public class InMemoryKeyValueStoreTest extends AbstractKeyValueStoreTest {
     @Override
     protected <K, V> KeyValueStore<K, V> createKeyValueStore(
             ProcessorContext context,
-            Class<K> keyClass, Class<V> valueClass,
+            Class<K> keyClass,
+            Class<V> valueClass,
             boolean useContextSerdes) {
 
         StateStoreSupplier supplier;
         if (useContextSerdes) {
-            Serializer<K> keySer = (Serializer<K>) context.keySerializer();
-            Deserializer<K> keyDeser = (Deserializer<K>) context.keyDeserializer();
-            Serializer<V> valSer = (Serializer<V>) context.valueSerializer();
-            Deserializer<V> valDeser = (Deserializer<V>) context.valueDeserializer();
-            supplier = Stores.create("my-store").withKeys(keySer, keyDeser).withValues(valSer, valDeser).inMemory().build();
+            supplier = Stores.create("my-store").withKeys(context.keySerde()).withValues(context.valueSerde()).inMemory().build();
         } else {
             supplier = Stores.create("my-store").withKeys(keyClass).withValues(valueClass).inMemory().build();
         }
 
         KeyValueStore<K, V> store = (KeyValueStore<K, V>) supplier.get();
-        store.init(context);
+        store.init(context, store);
         return store;
     }
 }

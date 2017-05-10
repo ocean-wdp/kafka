@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -14,32 +14,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.kafka.streams.state.internals;
 
-import org.apache.kafka.common.utils.SystemTime;
-import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.StreamsMetrics;
-import org.apache.kafka.streams.processor.ProcessorContext;
-import org.apache.kafka.streams.processor.StateRestoreCallback;
 import org.apache.kafka.common.metrics.Sensor;
-import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.processor.ProcessorContext;
+import org.apache.kafka.streams.processor.StateStore;
+import org.apache.kafka.streams.processor.internals.StreamsMetricsImpl;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
-import org.apache.kafka.streams.state.Serdes;
 
 import java.util.List;
 
-public class MeteredKeyValueStore<K, V> implements KeyValueStore<K, V> {
+/**
+ * Metered {@link KeyValueStore} wrapper is used for recording operation metrics, and hence its
+ * inner KeyValueStore implementation do not need to provide its own metrics collecting functionality.
+ *
+ * @param <K>
+ * @param <V>
+ */
+public class MeteredKeyValueStore<K, V> extends WrappedStateStore.AbstractStateStore implements KeyValueStore<K, V> {
 
-    protected final KeyValueStore<K, V> inner;
-    protected final StoreChangeLogger.ValueGetter getter;
-    protected final Serdes<K, V> serialization;
-    protected final String metricScope;
+    private final KeyValueStore<K, V> inner;
+    private final String metricScope;
     protected final Time time;
 
     private Sensor putTime;
+    private Sensor putIfAbsentTime;
     private Sensor getTime;
     private Sensor deleteTime;
     private Sensor putAllTime;
@@ -47,170 +49,140 @@ public class MeteredKeyValueStore<K, V> implements KeyValueStore<K, V> {
     private Sensor rangeTime;
     private Sensor flushTime;
     private Sensor restoreTime;
-    private StreamsMetrics metrics;
+    private StreamsMetricsImpl metrics;
 
-    private boolean loggingEnabled = true;
-    private StoreChangeLogger<K, V> changeLogger = null;
+
+    private K key;
+    private V value;
+    private Runnable getDelegate = new Runnable() {
+        @Override
+        public void run() {
+            value = inner.get(key);
+        }
+    };
+    private Runnable putDelegate = new Runnable() {
+        @Override
+        public void run() {
+            inner.put(key, value);
+        }
+    };
+    private Runnable putIfAbsentDelegate = new Runnable() {
+        @Override
+        public void run() {
+            value = inner.putIfAbsent(key, value);
+        }
+    };
+    private List<KeyValue<K, V>> entries;
+    private Runnable putAllDelegate = new Runnable() {
+        @Override
+        public void run() {
+            inner.putAll(entries);
+        }
+    };
+    private Runnable deleteDelegate = new Runnable() {
+        @Override
+        public void run() {
+            value = inner.delete(key);
+        }
+    };
+    private Runnable flushDelegate = new Runnable() {
+        @Override
+        public void run() {
+            inner.flush();
+        }
+    };
+    private ProcessorContext context;
+    private StateStore root;
+    private Runnable initDelegate = new Runnable() {
+        @Override
+        public void run() {
+            inner.init(context, root);
+        }
+    };
 
     // always wrap the store with the metered store
-    public MeteredKeyValueStore(final KeyValueStore<K, V> inner, Serdes<K, V> serialization, String metricScope, Time time) {
+    public MeteredKeyValueStore(final KeyValueStore<K, V> inner,
+                                final String metricScope,
+                                final Time time) {
+        super(inner);
         this.inner = inner;
-        this.getter = new StoreChangeLogger.ValueGetter<K, V>() {
-            public V get(K key) {
-                return inner.get(key);
-            }
-        };
-        this.serialization = serialization;
         this.metricScope = metricScope;
-        this.time = time != null ? time : new SystemTime();
-    }
-
-    public MeteredKeyValueStore<K, V> disableLogging() {
-        loggingEnabled = false;
-        return this;
+        this.time = time != null ? time : Time.SYSTEM;
     }
 
     @Override
-    public String name() {
-        return inner.name();
-    }
-
-    @Override
-    public void init(ProcessorContext context) {
+    public void init(ProcessorContext context, StateStore root) {
         final String name = name();
-        this.metrics = context.metrics();
-        this.putTime = this.metrics.addLatencySensor(metricScope, name, "put");
-        this.getTime = this.metrics.addLatencySensor(metricScope, name, "get");
-        this.deleteTime = this.metrics.addLatencySensor(metricScope, name, "delete");
-        this.putAllTime = this.metrics.addLatencySensor(metricScope, name, "put-all");
-        this.allTime = this.metrics.addLatencySensor(metricScope, name, "all");
-        this.rangeTime = this.metrics.addLatencySensor(metricScope, name, "range");
-        this.flushTime = this.metrics.addLatencySensor(metricScope, name, "flush");
-        this.restoreTime = this.metrics.addLatencySensor(metricScope, name, "restore");
-
-        serialization.init(context);
-        this.changeLogger = this.loggingEnabled ? new StoreChangeLogger<>(name, context, serialization) : null;
+        this.context = context;
+        this.root = root;
+        this.metrics = (StreamsMetricsImpl) context.metrics();
+        this.putTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "put", Sensor.RecordingLevel.DEBUG);
+        this.putIfAbsentTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "put-if-absent", Sensor.RecordingLevel.DEBUG);
+        this.getTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "get", Sensor.RecordingLevel.DEBUG);
+        this.deleteTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "delete", Sensor.RecordingLevel.DEBUG);
+        this.putAllTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "put-all", Sensor.RecordingLevel.DEBUG);
+        this.allTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "all", Sensor.RecordingLevel.DEBUG);
+        this.rangeTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "range", Sensor.RecordingLevel.DEBUG);
+        this.flushTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "flush", Sensor.RecordingLevel.DEBUG);
+        this.restoreTime = this.metrics.addLatencyAndThroughputSensor(metricScope, name, "restore", Sensor.RecordingLevel.DEBUG);
 
         // register and possibly restore the state from the logs
-        long startNs = time.nanoseconds();
-        inner.init(context);
-        try {
-            final Deserializer<K> keyDeserializer = serialization.keyDeserializer();
-            final Deserializer<V> valDeserializer = serialization.valueDeserializer();
-
-            context.register(this, loggingEnabled, new StateRestoreCallback() {
-                @Override
-                public void restore(byte[] key, byte[] value) {
-                    inner.put(keyDeserializer.deserialize(name, key),
-                            valDeserializer.deserialize(name, value));
-                }
-            });
-        } finally {
-            this.metrics.recordLatency(this.restoreTime, startNs, time.nanoseconds());
-        }
+        metrics.measureLatencyNs(time, initDelegate, this.restoreTime);
     }
 
     @Override
-    public boolean persistent() {
-        return inner.persistent();
+    public long approximateNumEntries() {
+        return inner.approximateNumEntries();
     }
 
     @Override
     public V get(K key) {
-        long startNs = time.nanoseconds();
-        try {
-            return this.inner.get(key);
-        } finally {
-            this.metrics.recordLatency(this.getTime, startNs, time.nanoseconds());
-        }
+        this.key = key;
+        metrics.measureLatencyNs(time, getDelegate, this.getTime);
+        return value;
     }
 
     @Override
     public void put(K key, V value) {
-        long startNs = time.nanoseconds();
-        try {
-            this.inner.put(key, value);
+        this.key = key;
+        this.value = value;
+        metrics.measureLatencyNs(time, putDelegate, this.putTime);
+    }
 
-            if (loggingEnabled) {
-                changeLogger.add(key);
-                changeLogger.maybeLogChange(this.getter);
-            }
-        } finally {
-            this.metrics.recordLatency(this.putTime, startNs, time.nanoseconds());
-        }
+    @Override
+    public V putIfAbsent(K key, V value) {
+        this.key = key;
+        this.value = value;
+        metrics.measureLatencyNs(time, putIfAbsentDelegate, this.putIfAbsentTime);
+        return this.value;
     }
 
     @Override
     public void putAll(List<KeyValue<K, V>> entries) {
-        long startNs = time.nanoseconds();
-        try {
-            this.inner.putAll(entries);
-
-            if (loggingEnabled) {
-                for (KeyValue<K, V> entry : entries) {
-                    K key = entry.key;
-                    changeLogger.add(key);
-                }
-                changeLogger.maybeLogChange(this.getter);
-            }
-        } finally {
-            this.metrics.recordLatency(this.putAllTime, startNs, time.nanoseconds());
-        }
+        this.entries = entries;
+        metrics.measureLatencyNs(time, putAllDelegate, this.putAllTime);
     }
 
     @Override
     public V delete(K key) {
-        long startNs = time.nanoseconds();
-        try {
-            V value = this.inner.delete(key);
-
-            removed(key);
-
-            return value;
-        } finally {
-            this.metrics.recordLatency(this.deleteTime, startNs, time.nanoseconds());
-        }
-    }
-
-    /**
-     * Called when the underlying {@link #inner} {@link KeyValueStore} removes an entry in response to a call from this
-     * store.
-     *
-     * @param key the key for the entry that the inner store removed
-     */
-    protected void removed(K key) {
-        if (loggingEnabled) {
-            changeLogger.delete(key);
-            changeLogger.maybeLogChange(this.getter);
-        }
+        this.key = key;
+        metrics.measureLatencyNs(time, deleteDelegate, this.deleteTime);
+        return value;
     }
 
     @Override
     public KeyValueIterator<K, V> range(K from, K to) {
-        return new MeteredKeyValueIterator<K, V>(this.inner.range(from, to), this.rangeTime);
+        return new MeteredKeyValueIterator<>(this.inner.range(from, to), this.rangeTime);
     }
 
     @Override
     public KeyValueIterator<K, V> all() {
-        return new MeteredKeyValueIterator<K, V>(this.inner.all(), this.allTime);
-    }
-
-    @Override
-    public void close() {
-        inner.close();
+        return new MeteredKeyValueIterator<>(this.inner.all(), this.allTime);
     }
 
     @Override
     public void flush() {
-        long startNs = time.nanoseconds();
-        try {
-            this.inner.flush();
-
-            if (loggingEnabled)
-                changeLogger.logChange(this.getter);
-        } finally {
-            this.metrics.recordLatency(this.flushTime, startNs, time.nanoseconds());
-        }
+        metrics.measureLatencyNs(time, flushDelegate, this.flushTime);
     }
 
     private class MeteredKeyValueIterator<K1, V1> implements KeyValueIterator<K1, V1> {
@@ -219,7 +191,7 @@ public class MeteredKeyValueStore<K, V> implements KeyValueStore<K, V> {
         private final Sensor sensor;
         private final long startNs;
 
-        public MeteredKeyValueIterator(KeyValueIterator<K1, V1> iter, Sensor sensor) {
+        MeteredKeyValueIterator(KeyValueIterator<K1, V1> iter, Sensor sensor) {
             this.iter = iter;
             this.sensor = sensor;
             this.startNs = time.nanoseconds();
@@ -249,6 +221,9 @@ public class MeteredKeyValueStore<K, V> implements KeyValueStore<K, V> {
             }
         }
 
+        @Override
+        public K1 peekNextKey() {
+            return iter.peekNextKey();
+        }
     }
-
 }

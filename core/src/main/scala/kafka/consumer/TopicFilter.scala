@@ -17,11 +17,9 @@
 
 package kafka.consumer
 
-
 import kafka.utils.Logging
 import java.util.regex.{PatternSyntaxException, Pattern}
 import kafka.common.Topic
-
 
 sealed abstract class TopicFilter(rawRegex: String) extends Logging {
 
@@ -36,7 +34,7 @@ sealed abstract class TopicFilter(rawRegex: String) extends Logging {
     Pattern.compile(regex)
   }
   catch {
-    case e: PatternSyntaxException =>
+    case _: PatternSyntaxException =>
       throw new RuntimeException(regex + " is an invalid regex.")
   }
 
@@ -47,7 +45,7 @@ sealed abstract class TopicFilter(rawRegex: String) extends Logging {
 
 case class Whitelist(rawRegex: String) extends TopicFilter(rawRegex) {
   override def isTopicAllowed(topic: String, excludeInternalTopics: Boolean) = {
-    val allowed = topic.matches(regex) && !(Topic.InternalTopics.contains(topic) && excludeInternalTopics)
+    val allowed = topic.matches(regex) && !(Topic.isInternal(topic) && excludeInternalTopics)
 
     debug("%s %s".format(
       topic, if (allowed) "allowed" else "filtered"))
@@ -60,7 +58,7 @@ case class Whitelist(rawRegex: String) extends TopicFilter(rawRegex) {
 
 case class Blacklist(rawRegex: String) extends TopicFilter(rawRegex) {
   override def isTopicAllowed(topic: String, excludeInternalTopics: Boolean) = {
-    val allowed = (!topic.matches(regex)) && !(Topic.InternalTopics.contains(topic) && excludeInternalTopics)
+    val allowed = (!topic.matches(regex)) && !(Topic.isInternal(topic) && excludeInternalTopics)
 
     debug("%s %s".format(
       topic, if (allowed) "allowed" else "filtered"))

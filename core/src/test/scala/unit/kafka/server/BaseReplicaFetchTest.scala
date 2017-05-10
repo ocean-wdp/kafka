@@ -20,13 +20,13 @@ package kafka.server
 import java.io.File
 
 import org.apache.kafka.common.protocol.SecurityProtocol
-import org.junit.{Test, After, Before}
+import org.junit.{After, Before, Test}
 import kafka.zk.ZooKeeperTestHarness
-import kafka.utils.TestUtils._
-import kafka.producer.KeyedMessage
-import kafka.serializer.StringEncoder
-import kafka.utils.{TestUtils}
-import kafka.common._
+import kafka.utils.TestUtils
+import TestUtils._
+import org.apache.kafka.clients.producer.ProducerRecord
+import org.apache.kafka.common.TopicPartition
+import org.apache.kafka.common.serialization.StringSerializer
 
 abstract class BaseReplicaFetchTest extends ZooKeeperTestHarness  {
   var brokers: Seq[KafkaServer] = null
@@ -63,24 +63,26 @@ abstract class BaseReplicaFetchTest extends ZooKeeperTestHarness  {
     }
 
     // send test messages to leader
-    val producer = TestUtils.createProducer[String, String](TestUtils.getBrokerListStrFromServers(brokers),
-                                                            encoder = classOf[StringEncoder].getName,
-                                                            keyEncoder = classOf[StringEncoder].getName)
-    val messages = testMessageList1.map(m => new KeyedMessage(topic1, m, m)) ++ testMessageList2.map(m => new KeyedMessage(topic2, m, m))
-    producer.send(messages:_*)
+    val producer = TestUtils.createNewProducer(TestUtils.getBrokerListStrFromServers(brokers),
+                                               retries = 5,
+                                               keySerializer = new StringSerializer,
+                                               valueSerializer = new StringSerializer)
+    val records = testMessageList1.map(m => new ProducerRecord(topic1, m, m)) ++
+      testMessageList2.map(m => new ProducerRecord(topic2, m, m))
+    records.map(producer.send).foreach(_.get)
     producer.close()
 
     def logsMatch(): Boolean = {
       var result = true
       for (topic <- List(topic1, topic2)) {
-        val topicAndPart = TopicAndPartition(topic, partition)
-        val expectedOffset = brokers.head.getLogManager().getLog(topicAndPart).get.logEndOffset
+        val tp = new TopicPartition(topic, partition)
+        val expectedOffset = brokers.head.getLogManager().getLog(tp).get.logEndOffset
         result = result && expectedOffset > 0 && brokers.forall { item =>
-          (expectedOffset == item.getLogManager().getLog(topicAndPart).get.logEndOffset)
+          expectedOffset == item.getLogManager().getLog(tp).get.logEndOffset
         }
       }
       result
     }
-    waitUntilTrue(logsMatch, "Broker logs should be identical")
+    waitUntilTrue(logsMatch _, "Broker logs should be identical")
   }
 }
